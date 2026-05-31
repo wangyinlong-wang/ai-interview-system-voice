@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Environment, ContactShadows } from '@react-three/drei';
 import {
   Mic,
@@ -64,6 +64,26 @@ function LoadingFallback() {
       <meshStandardMaterial color="#3b82f6" wireframe />
     </mesh>
   );
+}
+
+/**
+ * 根据视口调整视频面试构图，避免移动端头像被裁切。
+ */
+function ResponsiveInterviewCamera() {
+  const { camera, size } = useThree();
+
+  useEffect(() => {
+    const isNarrow = size.width < 640;
+    camera.position.set(0, isNarrow ? 0.92 : 0.96, isNarrow ? 5.4 : 4.45);
+    camera.lookAt(0, 0.62, 0);
+
+    if ('fov' in camera) {
+      camera.fov = isNarrow ? 58 : 46;
+      camera.updateProjectionMatrix();
+    }
+  }, [camera, size.width]);
+
+  return null;
 }
 
 /**
@@ -340,7 +360,7 @@ export default function FaceToFaceRoom() {
       {/* ============ 3D Canvas ============ */}
       <div className="absolute inset-0 z-0">
         <Canvas
-          camera={{ position: [0, 1.2, 3], fov: 45, near: 0.1, far: 100 }}
+          camera={{ position: [0, 0.96, 4.45], fov: 46, near: 0.1, far: 100 }}
           gl={{
             antialias: true,
             toneMapping: 4, // ACESFilmicToneMapping
@@ -350,6 +370,7 @@ export default function FaceToFaceRoom() {
           shadows={performanceTier !== 'low'}
         >
           <Suspense fallback={<LoadingFallback />}>
+            <ResponsiveInterviewCamera />
             <Scene3D
               sceneType={scene}
               showShadows={performanceTier !== 'low'}
@@ -377,7 +398,7 @@ export default function FaceToFaceRoom() {
 
           {/* 相机控制 */}
           <OrbitControls
-            target={[0, 1.0, 0]}
+            target={[0, 0.62, 0]}
             minPolarAngle={Math.PI / 6}
             maxPolarAngle={Math.PI / 2.2}
             minDistance={2}

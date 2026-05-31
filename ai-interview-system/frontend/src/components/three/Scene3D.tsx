@@ -235,7 +235,7 @@ interface DeskColors {
 
 function Desk({ colors }: { colors: DeskColors }) {
   return (
-    <group position={[0, -0.2, 1.5]}>
+    <group position={[0, -0.72, 1.58]}>
       {/* 桌面 */}
       <mesh position={[0, 0.3, 0]} castShadow receiveShadow>
         <boxGeometry args={[2.5, 0.08, 1.2]} />
@@ -270,7 +270,7 @@ function Desk({ colors }: { colors: DeskColors }) {
 
 function Laptop() {
   return (
-    <group position={[0.3, 0.38, 0]}>
+    <group position={[0.95, 0.38, -0.18]} scale={0.62}>
       {/* 底座 */}
       <mesh castShadow>
         <boxGeometry args={[0.4, 0.02, 0.28]} />
