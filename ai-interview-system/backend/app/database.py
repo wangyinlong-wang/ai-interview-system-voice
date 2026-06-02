@@ -139,6 +139,7 @@ async def seed_default_ai_model_config():
     """创建默认 AI 模型配置，避免运行时继续依赖写死的配置文件值。"""
     from sqlalchemy import select
     from app.models import AIModelConfig
+    from app.core.crypto import encrypt_api_key
 
     provider = "ollama" if "ollama" in settings.OPENAI_BASE_URL.lower() or "11434" in settings.OPENAI_BASE_URL else "openai-compatible"
     default_name = "ollama-default" if provider == "ollama" else "env-default"
@@ -153,7 +154,7 @@ async def seed_default_ai_model_config():
             provider=provider,
             base_url=settings.OPENAI_BASE_URL.rstrip("/"),
             model=settings.OPENAI_MODEL,
-            api_key=settings.OPENAI_API_KEY or "ollama",
+            api_key=encrypt_api_key(settings.OPENAI_API_KEY or "ollama"),
             temperature=0.7,
             max_tokens=800,
             is_active=True,

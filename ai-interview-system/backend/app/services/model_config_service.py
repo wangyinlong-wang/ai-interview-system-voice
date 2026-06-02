@@ -1,5 +1,7 @@
 """
 AI 模型配置服务 - 管理运行时可切换的大模型配置
+
+API Key 在数据库中以 Fernet 加密存储，读取时自动解密。
 """
 
 from dataclasses import dataclass
@@ -9,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.crypto import encrypt_api_key, decrypt_api_key, mask_api_key
 from app.database import async_session_factory
 from app.models import AIModelConfig
 
@@ -27,15 +30,6 @@ class RuntimeModelConfig:
     max_tokens: int = 800
 
 
-def mask_api_key(api_key: str) -> str:
-    """脱敏展示 API Key，避免后台列表泄露完整密钥。"""
-    if not api_key:
-        return ""
-    if len(api_key) <= 8:
-        return "*" * len(api_key)
-    return f"{api_key[:4]}****{api_key[-4:]}"
-
-
 def settings_runtime_config() -> RuntimeModelConfig:
     """从环境变量构造兜底配置，仅用于首次种子或数据库不可用场景。"""
     return RuntimeModelConfig(
@@ -49,9 +43,10 @@ def settings_runtime_config() -> RuntimeModelConfig:
 
 
 def runtime_config_from_model(config: AIModelConfig) -> RuntimeModelConfig:
+    """从 ORM 对象构造运行时配置，自动解密 API Key。"""
     return RuntimeModelConfig(
         name=config.name,
-        api_key=config.api_key,
+        api_key=decrypt_api_key(config.api_key),
         base_url=config.base_url.rstrip("/"),
         model=config.model,
         temperature=config.temperature,
@@ -95,3 +90,21 @@ async def activate_model_config(db: AsyncSession, config: AIModelConfig) -> AIMo
     await db.commit()
     await db.refresh(config)
     return config
+
+
+# ============ 加密辅助 ============
+
+def encrypt_api_key_for_storage(plain: str) -> str:
+    """写入数据库前加密 API Key。"""
+    return encrypt_api_key(plain)
+
+
+def decrypt_api_key_from_storage(cipher: str) -> str:
+    """从数据库读出后解密 API Key。"""
+    return decrypt_api_key(cipher)
+
+
+def get_masked_api_key(cipher: str) -> str:
+    """从加密值获取脱敏展示字符串。"""
+    plain = decrypt_api_key(cipher)
+    return mask_api_key(plain)

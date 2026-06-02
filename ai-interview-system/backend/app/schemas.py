@@ -55,6 +55,20 @@ class AuthResponse(BaseModel):
     username: str
     email: str
     token: str
+    refresh_token: str = ""
+    token_type: str = "bearer"
+
+
+class RefreshTokenRequest(BaseModel):
+    """刷新 Token 请求"""
+    refresh_token: str = Field(..., min_length=1)
+
+
+class RefreshTokenResponse(BaseModel):
+    """刷新 Token 响应"""
+    token: str
+    refresh_token: str
+    token_type: str = "bearer"
 
 
 # ============= 简历相关 =============

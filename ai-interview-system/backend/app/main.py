@@ -4,9 +4,15 @@ FastAPI 应用入口 - AI 模拟面试系统后端
 
 import os
 import time
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.database import init_db, close_db
@@ -14,16 +20,93 @@ from app.database import init_db, close_db
 # 导入路由
 from app.routers import auth, resumes, interviews, questions, crawl, model_configs
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# 创建 FastAPI 应用实例
+# ============= 速率限制器 =============
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+
+
+# ============= 生命周期管理（lifespan） =============
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """应用生命周期管理 — 替代已弃用的 @app.on_event"""
+    # ---- startup ----
+    # 安全配置校验
+    settings.check_security()
+
+    # 初始化数据库（自动创建表）
+    await init_db()
+
+    # 创建上传目录
+    upload_dir = settings.UPLOAD_DIR
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # 初始化爬虫调度器（异步方式，替代线程+sleep）
+    import asyncio
+    scheduler_ready = False
+
+    async def init_scheduler_async():
+        nonlocal scheduler_ready
+        try:
+            # 等待数据库完全就绪
+            await asyncio.sleep(2)
+            from app.crawlers.scheduler import init_scheduler
+            await init_scheduler()
+            scheduler_ready = True
+            logger.info("🕷️ 爬虫调度器已启动")
+        except Exception as e:
+            logger.warning("⚠️ 爬虫调度器启动失败: %s", e)
+
+    scheduler_task = asyncio.create_task(init_scheduler_async())
+
+    logger.info("🚀 %s v%s 启动成功", settings.APP_NAME, settings.APP_VERSION)
+    logger.info("📖 API 文档: http://localhost:8000/docs")
+    logger.info("📁 上传目录: %s", upload_dir)
+
+    yield  # ---- 应用运行中 ----
+
+    # ---- shutdown ----
+    # 取消调度器初始化任务（若仍在进行）
+    if not scheduler_ready:
+        scheduler_task.cancel()
+
+    # 关闭爬虫调度器
+    try:
+        from app.crawlers.scheduler import shutdown_scheduler
+        shutdown_scheduler()
+        logger.info("🕷️ 爬虫调度器已关闭")
+    except Exception as e:
+        logger.warning("爬虫调度器关闭异常: %s", e)
+
+    # 关闭 AI Service 的 HTTP 客户端
+    try:
+        from app.services.ai_service import get_ai_service
+        ai = get_ai_service()
+        await ai.close()
+        logger.info("AI Service HTTP 客户端已关闭")
+    except Exception as e:
+        logger.warning("AI Service 关闭异常: %s", e)
+
+    await close_db()
+    logger.info("👋 应用已关闭")
+
+
+# ============= 创建 FastAPI 应用实例 =============
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="AI 模拟面试系统 - 提供简历管理、AI 模拟面试、评估报告等功能",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
+
+# 注册速率限制
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 注册 CORS 中间件
 app.add_middleware(
@@ -32,53 +115,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ============= 生命周期事件 =============
-
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时执行"""
-    # 初始化数据库（自动创建表）
-    await init_db()
-    
-    # 创建上传目录
-    upload_dir = os.environ.get("UPLOAD_DIR", "./uploads/resumes")
-    os.makedirs(upload_dir, exist_ok=True)
-    
-    # 初始化爬虫调度器（延迟启动，确保数据库就绪）
-    import threading
-    def delayed_init_scheduler():
-        """延迟初始化调度器"""
-        import time
-        import asyncio
-        time.sleep(3)  # 等待数据库和应用完全启动
-        try:
-            from app.crawlers.scheduler import init_scheduler
-            asyncio.run(init_scheduler())
-            print("🕷️ 爬虫调度器已启动")
-        except Exception as e:
-            print(f"⚠️ 爬虫调度器启动失败: {e}")
-    
-    thread = threading.Thread(target=delayed_init_scheduler, daemon=True, name="scheduler-init")
-    thread.start()
-    
-    print(f"🚀 {settings.APP_NAME} v{settings.APP_VERSION} 启动成功")
-    print(f"📖 API 文档: http://localhost:8000/docs")
-    print(f"📁 上传目录: {upload_dir}")
-    print(f"🕷️ 爬虫调度器正在初始化...")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时执行"""
-    # 关闭爬虫调度器
-    from app.crawlers.scheduler import shutdown_scheduler
-    shutdown_scheduler()
-    print("🕷️ 爬虫调度器已关闭")
-    
-    await close_db()
-    print("👋 应用已关闭")
 
 
 # ============= 中间件 =============
@@ -111,12 +147,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """通用异常处理"""
+    """通用异常处理 — 不向客户端泄露内部错误细节"""
+    logging.getLogger(__name__).exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
         content={
             "code": 500,
-            "message": f"服务器内部错误: {str(exc)}",
+            "message": "服务器内部错误，请稍后重试",
             "data": None,
             "timestamp": int(time.time()),
         },
