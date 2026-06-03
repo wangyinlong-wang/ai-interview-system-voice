@@ -48,6 +48,9 @@ class UserInfo(BaseModel):
     avatar_url: Optional[str] = None
     created_at: Optional[datetime] = None
 
+    class Config:
+        from_attributes = True
+
 
 class AuthResponse(BaseModel):
     """认证响应（注册/登录）"""
@@ -98,6 +101,9 @@ class ResumeInfo(BaseModel):
     parsed_data: Optional[Dict[str, Any]] = None
     uploaded_at: Optional[datetime] = None
     parsed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 
 class ResumeParseResult(BaseModel):
@@ -154,6 +160,9 @@ class InterviewInfo(BaseModel):
     interviewer_model: Optional[str] = "male"
     scene: Optional[str] = "office"
 
+    class Config:
+        from_attributes = True
+
 
 class InterviewMessageCreate(BaseModel):
     """发送消息请求"""
@@ -167,6 +176,9 @@ class InterviewMessageInfo(BaseModel):
     role: str
     content: str
     created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 
 class InterviewComplete(BaseModel):
@@ -197,6 +209,9 @@ class EvaluationInfo(BaseModel):
     dimension_scores: Optional[Dict[str, Any]] = None
     question_reviews: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 
 class EvaluationCreate(BaseModel):

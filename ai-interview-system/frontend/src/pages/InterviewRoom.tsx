@@ -126,6 +126,18 @@ export default function InterviewRoom() {
     };
   }, [interviewId, fetchInterview, fetchMessages, stopTTS]);
 
+  // 面试刚创建、尚无对话时，自动发送开场消息触发 AI 面试官
+  useEffect(() => {
+    if (
+      currentInterview?.status === 'ongoing' &&
+      messages.length === 0 &&
+      !isSending &&
+      !isTyping
+    ) {
+      sendMessage(interviewId, '你好，我准备好了，请开始面试吧。');
+    }
+  }, [currentInterview?.status, messages.length, isSending, isTyping, interviewId, sendMessage]);
+
   // 自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -1,13 +1,18 @@
 /**
  * API 服务层 - 封装所有后端接口调用
+ *
+ * 改进:
+ * - 支持 Refresh Token 自动续期（401 拦截器）
+ * - SSE 解析改用状态机，修复 event/data 行配对问题
  */
 
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import type {
   ApiResponse,
   User,
   LoginFormData,
   RegisterFormData,
+  AuthPayload,
   Resume,
   Interview,
   InterviewMessage,
@@ -40,8 +45,6 @@ const api = axios.create({
   },
 }) as ApiClient;
 
-type AuthPayload = { id: number; username: string; email: string; token: string };
-
 const getApi = <T>(url: string, config?: AxiosRequestConfig) =>
   api.get<ApiResponse<T>, ApiResponse<T>>(url, config);
 
@@ -53,6 +56,29 @@ const putApi = <T>(url: string, data?: any, config?: AxiosRequestConfig) =>
 
 const deleteApi = <T>(url: string, config?: AxiosRequestConfig) =>
   api.delete<ApiResponse<T>, ApiResponse<T>>(url, config);
+
+// ============= Token 刷新管理 =============
+
+let isRefreshing = false;
+let refreshSubscribers: Array<(token: string) => void> = [];
+
+/** 将等待中的请求加入队列，等刷新成功后依次重试 */
+function subscribeTokenRefresh(cb: (token: string) => void) {
+  refreshSubscribers.push(cb);
+}
+
+/** 刷新成功后，通知所有排队请求 */
+function onTokenRefreshed(newToken: string) {
+  refreshSubscribers.forEach((cb) => cb(newToken));
+  refreshSubscribers = [];
+}
+
+/** 清除认证状态并跳转登录页 */
+function forceLogout() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('refresh_token');
+  window.location.href = '/auth';
+}
 
 // 请求拦截器 - 添加 Token
 api.interceptors.request.use(
@@ -66,18 +92,60 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// 响应拦截器 - 统一错误处理
+// 响应拦截器 - 401 自动刷新 Token
 api.interceptors.response.use(
-  (response) => {
-    return response.data;
-  },
-  (error) => {
-    if (error.response?.status === 401) {
-      // Token 过期，清除登录状态
-      localStorage.removeItem('token');
-      window.location.href = '/auth';
+  (response) => response.data,
+  async (error) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
+    // 非 401 或已重试过，直接拒绝
+    if (error.response?.status !== 401 || originalRequest._retry) {
+      return Promise.reject(error.response?.data?.message || error.message || '请求失败');
     }
-    return Promise.reject(error.response?.data?.message || error.message || '请求失败');
+
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (!refreshToken) {
+      forceLogout();
+      return Promise.reject('登录已过期，请重新登录');
+    }
+
+    // 防并发：如果正在刷新，将当前请求加入等待队列
+    if (isRefreshing) {
+      return new Promise((resolve) => {
+        subscribeTokenRefresh((newToken: string) => {
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          originalRequest._retry = true;
+          resolve(api(originalRequest));
+        });
+      });
+    }
+
+    isRefreshing = true;
+    originalRequest._retry = true;
+
+    try {
+      // 调用刷新接口（绕过拦截器，直接用 axios）
+      const response = await axios.post('/api/v1/auth/refresh', {
+        refresh_token: refreshToken,
+      });
+
+      const { token: newToken, refresh_token: newRefreshToken } = response.data.data;
+      localStorage.setItem('token', newToken);
+      localStorage.setItem('refresh_token', newRefreshToken);
+
+      // 通知排队请求
+      onTokenRefreshed(newToken);
+
+      // 重试原始请求
+      originalRequest.headers.Authorization = `Bearer ${newToken}`;
+      return api(originalRequest);
+    } catch (refreshError) {
+      // 刷新失败，强制登出
+      forceLogout();
+      return Promise.reject('登录已过期，请重新登录');
+    } finally {
+      isRefreshing = false;
+    }
   }
 );
 
@@ -86,16 +154,17 @@ api.interceptors.response.use(
 export const authApi = {
   /** 用户注册 */
   register: (data: RegisterFormData) =>
-    postApi<AuthPayload>(
-      '/auth/register',
-      data
-    ),
+    postApi<AuthPayload>('/auth/register', data),
 
   /** 用户登录 */
   login: (data: LoginFormData) =>
-    postApi<AuthPayload>(
-      '/auth/login',
-      data
+    postApi<AuthPayload>('/auth/login', data),
+
+  /** 刷新 Token */
+  refresh: (refreshToken: string) =>
+    postApi<{ token: string; refresh_token: string; token_type: string }>(
+      '/auth/refresh',
+      { refresh_token: refreshToken }
     ),
 
   /** 获取当前用户 */
@@ -151,7 +220,7 @@ export const interviewApi = {
   sendMessageStream: (id: number, content: string): EventSource => {
     const token = localStorage.getItem('token');
     const url = `/api/v1/interviews/${id}/messages`;
-    
+
     // 使用 fetch + ReadableStream 方式
     return null as any; // 占位，实际使用 sendMessageSSE 函数
   },
@@ -170,7 +239,7 @@ export const interviewApi = {
   delete: (id: number) => deleteApi<void>(`/interviews/${id}`),
 };
 
-// SSE 发送消息（手动实现，不使用 axios）
+// SSE 发送消息 — 状态机解析
 export function sendMessageSSE(
   interviewId: number,
   content: string,
@@ -180,10 +249,8 @@ export function sendMessageSSE(
 ): () => void {
   const token = localStorage.getItem('token');
   const url = `/api/v1/interviews/${interviewId}/messages`;
-  
-  // 使用 fetch API 实现 SSE
   const controller = new AbortController();
-  
+
   fetch(url, {
     method: 'POST',
     headers: {
@@ -198,47 +265,53 @@ export function sendMessageSSE(
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.message || `HTTP ${response.status}`);
       }
-      
+
       const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
-      
+
       const decoder = new TextDecoder();
       let buffer = '';
-      
+      // 状态机：跟踪当前事件类型
+      let currentEvent = '';
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
+        buffer = lines.pop() || ''; // 最后一行可能不完整，保留
+
         for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            const eventType = line.slice(7);
-            // 读取下一行的 data
-            const dataLine = lines[lines.indexOf(line) + 1];
-            if (dataLine && dataLine.startsWith('data: ')) {
-              const data = dataLine.slice(6);
-              try {
-                if (eventType === 'message') {
-                  const parsed = JSON.parse(data);
-                  if (parsed.delta) {
-                    onChunk(parsed.delta);
-                  }
-                } else if (eventType === 'done') {
-                  const parsed = JSON.parse(data);
-                  onDone(parsed);
-                } else if (eventType === 'error') {
-                  const parsed = JSON.parse(data);
-                  onError(parsed.error || '未知错误');
+          const trimmed = line.trim();
+
+          if (trimmed.startsWith('event: ')) {
+            currentEvent = trimmed.slice(7);
+          } else if (trimmed.startsWith('data: ')) {
+            const data = trimmed.slice(6);
+            try {
+              if (currentEvent === 'message') {
+                const parsed = JSON.parse(data);
+                if (parsed.delta) {
+                  onChunk(parsed.delta);
                 }
-              } catch {
-                // 忽略解析错误
+              } else if (currentEvent === 'done') {
+                const parsed = JSON.parse(data);
+                onDone(parsed);
+              } else if (currentEvent === 'error') {
+                const parsed = JSON.parse(data);
+                onError(parsed.error || '未知错误');
+              } else if (currentEvent === 'start') {
+                // 连接已建立，无需处理
               }
+            } catch {
+              // 忽略 JSON 解析错误
             }
+          } else if (trimmed === '') {
+            // 空行表示事件结束，重置状态
+            currentEvent = '';
           }
         }
       }
@@ -248,12 +321,11 @@ export function sendMessageSSE(
         onError(err.message || '请求失败');
       }
     });
-  
-  // 返回取消函数
+
   return () => controller.abort();
 }
 
-// ============= 题库相关 API（新增） =============
+// ============= 题库相关 API =============
 
 export const questionApi = {
   /** 获取题库列表 */
@@ -302,7 +374,7 @@ export const questionApi = {
     postApi<void>(`/questions/${id}/reject`, {}),
 };
 
-// ============= 采集管理 API（新增） =============
+// ============= 采集管理 API =============
 
 export const crawlApi = {
   /** 获取采集任务列表 */

@@ -2,7 +2,7 @@
  * 全局类型定义
  */
 
-// ============= 用户相关 =============
+// ============= 认证相关 =============
 
 export interface User {
   id: number;
@@ -10,6 +10,15 @@ export interface User {
   email: string;
   avatar_url?: string;
   created_at?: string;
+}
+
+export interface AuthPayload {
+  id: number;
+  username: string;
+  email: string;
+  token: string;
+  refresh_token: string;
+  token_type: string;
 }
 
 export interface LoginFormData {

@@ -1,5 +1,10 @@
 /**
  * 认证状态管理 - Zustand Store
+ *
+ * 支持 Access Token + Refresh Token 双令牌机制:
+ * - Access Token: 短期有效（30 分钟），用于 API 鉴权
+ * - Refresh Token: 长期有效（7 天），用于自动续期
+ * - 401 时由 api.ts 拦截器自动刷新，无需用户感知
  */
 
 import { create } from 'zustand';
@@ -10,6 +15,7 @@ interface AuthState {
   // 状态
   user: User | null;
   token: string | null;
+  refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
@@ -18,6 +24,7 @@ interface AuthState {
   login: (data: LoginFormData) => Promise<void>;
   register: (data: RegisterFormData) => Promise<void>;
   logout: () => void;
+  refreshTokens: (newToken: string, newRefreshToken: string) => void;
   fetchUser: () => Promise<void>;
   clearError: () => void;
   init: () => void;
@@ -26,6 +33,7 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   token: localStorage.getItem('token'),
+  refreshToken: localStorage.getItem('refresh_token'),
   isAuthenticated: !!localStorage.getItem('token'),
   isLoading: false,
   error: null,
@@ -34,7 +42,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   init: () => {
     const token = localStorage.getItem('token');
     if (token) {
-      set({ token, isAuthenticated: true });
+      set({ token, refreshToken: localStorage.getItem('refresh_token'), isAuthenticated: true });
       get().fetchUser();
     }
   },
@@ -44,10 +52,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const response = await authApi.login(data);
-      const { token, id, username, email } = response.data;
+      const { token, refresh_token, id, username, email } = response.data;
       localStorage.setItem('token', token);
+      localStorage.setItem('refresh_token', refresh_token);
       set({
         token,
+        refreshToken: refresh_token,
         user: { id, username, email },
         isAuthenticated: true,
         isLoading: false,
@@ -67,10 +77,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { confirmPassword, ...registerData } = data;
       const response = await authApi.register(registerData);
-      const { token, id, username, email } = response.data;
+      const { token, refresh_token, id, username, email } = response.data;
       localStorage.setItem('token', token);
+      localStorage.setItem('refresh_token', refresh_token);
       set({
         token,
+        refreshToken: refresh_token,
         user: { id, username, email },
         isAuthenticated: true,
         isLoading: false,
@@ -87,8 +99,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   /** 登出 */
   logout: () => {
     localStorage.removeItem('token');
-    set({ user: null, token: null, isAuthenticated: false, error: null });
+    localStorage.removeItem('refresh_token');
+    set({ user: null, token: null, refreshToken: null, isAuthenticated: false, error: null });
     window.location.href = '/auth';
+  },
+
+  /** 刷新 Token（供 api.ts 拦截器调用） */
+  refreshTokens: (newToken: string, newRefreshToken: string) => {
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('refresh_token', newRefreshToken);
+    set({ token: newToken, refreshToken: newRefreshToken });
   },
 
   /** 获取当前用户信息 */
@@ -99,7 +119,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       // Token 无效，清除状态
       localStorage.removeItem('token');
-      set({ user: null, token: null, isAuthenticated: false });
+      localStorage.removeItem('refresh_token');
+      set({ user: null, token: null, refreshToken: null, isAuthenticated: false });
     }
   },
 

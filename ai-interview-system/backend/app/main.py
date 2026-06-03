@@ -10,11 +10,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
+from app.core.rate_limit import limiter
 from app.database import init_db, close_db
 
 # 导入路由
@@ -22,9 +22,6 @@ from app.routers import auth, resumes, interviews, questions, crawl, model_confi
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-# ============= 速率限制器 =============
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
 # ============= 生命周期管理（lifespan） =============

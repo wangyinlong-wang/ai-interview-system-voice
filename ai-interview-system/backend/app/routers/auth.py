@@ -17,7 +17,7 @@ from app.core.security import (
     create_token_pair, verify_token, get_current_user,
     TOKEN_TYPE_REFRESH, TOKEN_TYPE_ACCESS,
 )
-from app.main import limiter
+from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 

@@ -18,34 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Interview, Message, Evaluation, Resume
 from app.services.ai_service import generate_interview_response, generate_evaluation, get_reference_questions
+from app.services.constants import DEFAULT_EVALUATION_SCORES, DEFAULT_RESUME_FIELDS
 
 logger = logging.getLogger(__name__)
-
-
-# ============= 常量 =============
-
-DEFAULT_EVALUATION_SCORES = {
-    "overall_score": 70,
-    "technical_score": 70,
-    "communication_score": 70,
-    "logic_score": 70,
-    "expression_score": 70,
-    "job_fit_score": 70,
-    "adaptability_score": 70,
-    "overall_comment": "评估完成",
-    "strengths": "",
-    "weaknesses": "",
-    "suggestions": "",
-    "dimension_scores": {},
-    "question_reviews": [],
-}
-
-DEFAULT_RESUME_FIELDS = {
-    "name": "", "phone": "", "email": "",
-    "skills": [], "work_experience": [],
-    "project_experience": [], "education": [],
-    "self_evaluation": "",
-}
 
 
 # ============= 简历格式化 =============

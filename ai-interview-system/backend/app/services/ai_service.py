@@ -15,6 +15,7 @@ from typing import List, Dict, Any, AsyncGenerator, Optional
 
 from app.config import get_settings
 from app.services.model_config_service import DatabaseModelConfigProvider, RuntimeModelConfig
+from app.services.constants import DEFAULT_EVALUATION_SCORES, DEFAULT_RESUME_FIELDS
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -190,31 +191,7 @@ def extract_json_object(content: str) -> Dict[str, Any]:
     raise json.JSONDecodeError("No complete JSON object found", text, start)
 
 
-# ============= 默认值常量 =============
-
-DEFAULT_RESUME_FIELDS = {
-    "name": "", "phone": "", "email": "",
-    "skills": [], "work_experience": [],
-    "project_experience": [], "education": [],
-    "self_evaluation": "",
-}
-
-DEFAULT_EVALUATION_SCORES = {
-    "overall_score": 70,
-    "technical_score": 70,
-    "communication_score": 70,
-    "logic_score": 70,
-    "expression_score": 70,
-    "job_fit_score": 70,
-    "adaptability_score": 70,
-    "overall_comment": "评估完成",
-    "strengths": "",
-    "weaknesses": "",
-    "suggestions": "",
-    "dimension_scores": {},
-    "question_reviews": [],
-}
-
+# ============= 简历解析 =============
 
 RESUME_PARSE_PROMPT = """你是一位专业的简历解析专家。请从以下简历文本中提取关键信息，并以结构化 JSON 格式输出。
 
